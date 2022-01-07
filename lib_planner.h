@@ -20,6 +20,7 @@ struct Successor{
     actionT action;
     stateT state;
     double cost = 0;
+    bool valid = true;
 };
 
 

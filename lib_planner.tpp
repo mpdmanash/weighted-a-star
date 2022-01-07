@@ -28,6 +28,7 @@ double WAstar<stateT, actionT, stateHasher>::Plan(const stateT &s_start, const s
         double g_this_state = this->getG(this_state);
         auto successors = m_getSuccessors(this_state);
         for(const auto &successor: successors){
+            if(!successor.valid) continue;
             if(!this->isInCLOSED(successor.state,m_CLOSED)){
                 double h_successor = m_getH(successor.state, s_goal);
                 double g_successor = g_this_state + successor.cost;
