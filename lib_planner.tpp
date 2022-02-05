@@ -1,76 +1,111 @@
+/*
+ * @author Manash Pratim Das (mpratimd@andrew.cmu.edu)
+*/
+
 #pragma once
 
-template <class stateT, class actionT, class stateHasher>
-WAstar<stateT, actionT, stateHasher>::WAstar(double epsilon, 
-        std::function<double(const stateT &state, const stateT &goal)> getH,
-        std::function<std::vector<Successor<actionT, stateT> >(const stateT &state)> getSuccessors,
-        std::function<bool(const stateT &state, const stateT &goal)> satisfiesGoal){
-    m_epsilon = epsilon;
-    m_getH = getH;
-    m_getSuccessors = getSuccessors;
-    m_satisfiesGoal = satisfiesGoal;
+namespace was {
+template <class StateT, class ActionT, class StateHasher>
+WAStar<StateT, ActionT, StateHasher>::WAStar(
+    double epsilon, size_t max_neighbors,
+    std::function<double(const StateT &state, const StateT &goal)> GetH,
+    std::function<void(std::vector<ActionState<ActionT, StateT> > *neighbors,
+                       const StateT &state, const StateT &goal)>
+        FillNeighbors,
+    std::function<bool(const StateT &state, const StateT &goal)>
+        IsGoalCondition) {
+    epsilon_ = epsilon;
+    GetH_ = GetH;
+    FillNeighbors_ = FillNeighbors;
+    IsGoalCondition_ = IsGoalCondition;
+    neighbors_.resize(max_neighbors);
 }
 
-template <class stateT, class actionT, class stateHasher>
-double WAstar<stateT, actionT, stateHasher>::Plan(const stateT &s_start, const stateT &s_goal){
-    m_g[s_start] = 0.0;
-    m_OPEN.push(f_State<stateT>{0.0, s_start});
+template <class StateT, class ActionT, class StateHasher>
+double WAStar<StateT, ActionT, StateHasher>::Plan(const StateT &s_start,
+                                                  const StateT &s_goal) {
+    g_values_[s_start] = 0.0;
+    OPEN_.push(FState<StateT>{0.0, s_start});
     bool goal_expanded = false;
-    while(!goal_expanded && m_OPEN.size() != 0){
-        auto this_state = m_OPEN.top().state;
-        m_OPEN.pop();
-        m_CLOSED.insert(this_state);
-        if(m_satisfiesGoal(this_state, s_goal)){
-            goal_expanded=true; 
-            backtrackState=this_state; 
-            return this->getG(this_state);
+    while (!goal_expanded && OPEN_.size() != 0) {
+        StateT this_state = OPEN_.top().state;
+        OPEN_.pop();
+        CLOSED_.insert(this_state);
+        if (IsGoalCondition_(this_state, s_goal)) {
+            goal_expanded = true;
+            backtrack_seed_ = this_state;
+
+            return this->GetG(this_state);
         }
-        double g_this_state = this->getG(this_state);
-        auto successors = m_getSuccessors(this_state);
-        for(const auto &successor: successors){
-            if(!this->isInCLOSED(successor.state,m_CLOSED)){
-                double h_successor = m_getH(successor.state, s_goal);
-                double g_successor = g_this_state + successor.cost;
-                if (this->getG(successor.state) > g_successor){
-                    m_g[successor.state] = g_successor;
-                    m_transitions[successor.state] = std::make_pair(this_state,successor.action);
-                    m_OPEN.push(f_State<stateT>{g_successor + m_epsilon*h_successor, successor.state});
+        double g_this_state = this->GetG(this_state);
+        FillNeighbors_(&neighbors_, this_state, s_goal);
+        for (const auto &neighbor : neighbors_) {
+            if (!neighbor.valid) continue;
+            if (!this->IsInCLOSED(neighbor.state, CLOSED_)) {
+                double h_neighbor = GetH_(neighbor.state, s_goal);
+                double g_neighbor = g_this_state + neighbor.cost;
+                if (this->GetG(neighbor.state) > g_neighbor) {
+                    g_values_[neighbor.state] = g_neighbor;
+                    backward_transitions_[neighbor.state] =
+                        ActionState<ActionT, StateT>{neighbor.action,
+                                                     this_state};
+                    OPEN_.push(FState<StateT>{
+                        g_neighbor + epsilon_ * h_neighbor, neighbor.state});
                 }
             }
         }
     }
-    return this->getG(s_goal); // infinity if path to goal is not found
+    return this->GetG(s_goal);  // infinity if path to goal is not found
 }
 
-template <class stateT, class actionT, class stateHasher>
-void WAstar<stateT, actionT, stateHasher>::Reset(){
-    m_g.clear(); m_OPEN = std::priority_queue<f_State<stateT> >(); m_transitions.clear(); m_CLOSED.clear();
+template <class StateT, class ActionT, class StateHasher>
+void WAStar<StateT, ActionT, StateHasher>::Reset() {
+    g_values_.clear();
+    OPEN_ = std::priority_queue<FState<StateT> >();
+    backward_transitions_.clear();
+    CLOSED_.clear();
 }
 
-template <class stateT, class actionT, class stateHasher>
-std::vector<actionT> WAstar<stateT, actionT, stateHasher>::BackTrackPath(const stateT &s_goal){
-    std::vector<actionT> path;
-    stateT prev_state = backtrackState;
-    while(true){
-        auto it = m_transitions.find(prev_state);
-        if (it != m_transitions.end()) {
-            path.insert(path.begin(),it->second.second);  
-            prev_state = it->second.first;
+template <class StateT, class ActionT, class StateHasher>
+std::vector<ActionState<ActionT, StateT> >
+WAStar<StateT, ActionT, StateHasher>::BackTrackPath(const StateT &s_goal) {
+    std::vector<ActionState<ActionT, StateT> > path;
+    StateT prev_state = backtrack_seed_;
+    while (true) {
+        auto it = backward_transitions_.find(prev_state);
+        if (it != backward_transitions_.end()) {
+            path.insert(path.begin(), it->second);
+            prev_state = it->second.state;
+        } else {
+            break;
         }
-        else break;
     }
     return path;
 }
 
-template <class stateT, class actionT, class stateHasher>
-bool WAstar<stateT, actionT, stateHasher>::isInCLOSED(const stateT &s, 
-        const std::unordered_set<stateT, stateHasher> &CLOSED){
+template <class StateT, class ActionT, class StateHasher>
+inline double WAStar<StateT, ActionT, StateHasher>::GetGHeuristic(
+    const StateT &s, const StateT &s2) {
+    auto it = g_values_.find(s);
+    if (it != g_values_.end())
+        return it->second;
+    else
+        return std::numeric_limits<double>::infinity();
+}
+
+template <class StateT, class ActionT, class StateHasher>
+inline bool WAStar<StateT, ActionT, StateHasher>::IsInCLOSED(
+    const StateT &s, const std::unordered_set<StateT, StateHasher> &CLOSED) {
     return (CLOSED.find(s) != CLOSED.end());
 }
 
-template <class stateT, class actionT, class stateHasher>
-double WAstar<stateT, actionT, stateHasher>::getG(const stateT &s){
-    auto it = m_g.find(s);
-    if (it != m_g.end()) return it->second;
-    else return std::numeric_limits<double>::infinity();
+template <class StateT, class ActionT, class StateHasher>
+inline double WAStar<StateT, ActionT, StateHasher>::GetG(const StateT &s) {
+    auto it = g_values_.find(s);
+    if (it != g_values_.end())
+        return it->second;
+    else
+        return std::numeric_limits<double>::infinity();
 }
+
+}  // namespace was
